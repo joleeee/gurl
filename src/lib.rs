@@ -138,7 +138,7 @@ impl GeminiClient {
 
         if io_state.peer_has_closed() {
             self.clean_closure = true;
-            self.clean_closure = true;
+            self.closing = true;
         }
     }
 
