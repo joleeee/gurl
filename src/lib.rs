@@ -52,6 +52,7 @@ pub enum RequestError {
     DecodeError(response::ResponseError),
     IoError(io::Error),
     TlsError(rustls::Error),
+    DnsError(rustls::client::InvalidDnsNameError),
 }
 
 impl From<response::ResponseError> for RequestError {
@@ -69,6 +70,12 @@ impl From<io::Error> for RequestError {
 impl From<rustls::Error> for RequestError {
     fn from(e: rustls::Error) -> Self {
         Self::TlsError(e)
+    }
+}
+
+impl From<rustls::client::InvalidDnsNameError> for RequestError {
+    fn from(e: rustls::client::InvalidDnsNameError) -> Self {
+        Self::DnsError(e)
     }
 }
 
@@ -188,7 +195,7 @@ impl GeminiClient {
 }
 
 impl Request {
-    pub fn run(&self) -> Response {
+    pub fn run(&self) -> Result<Response, RequestError> {
         let config = {
             let verifier = NoVerify;
 
@@ -200,17 +207,15 @@ impl Request {
             Arc::new(config)
         };
 
-        let name = self.host.to_string().as_str().try_into().unwrap();
+        let name = self.host.to_string().as_str().try_into()?;
         let address = {
-            let mut adrs = format!("{}:{}", self.host, self.port)
-                .to_socket_addrs()
-                .unwrap();
+            let mut adrs = format!("{}:{}", self.host, self.port).to_socket_addrs()?;
             adrs.next().unwrap()
         };
-        let sock = TcpStream::connect(address).unwrap();
+        let sock = TcpStream::connect(address)?;
 
-        let gem = GeminiClient::new(sock, name, config).unwrap();
+        let gem = GeminiClient::new(sock, name, config)?;
 
-        gem.request(&self.url).unwrap()
+        gem.request(&self.url)
     }
 }
