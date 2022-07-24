@@ -1,7 +1,7 @@
 use mio::net::TcpStream;
 use std::{
     io::{self, Read, Write},
-    net::{SocketAddr, ToSocketAddrs},
+    net::ToSocketAddrs,
     sync::Arc,
 };
 use url::{Host, Url};
@@ -205,7 +205,7 @@ impl Request {
             let mut adrs = format!("{}:{}", self.host, self.port)
                 .to_socket_addrs()
                 .unwrap();
-            SocketAddr::from(adrs.next().unwrap())
+            adrs.next().unwrap()
         };
         let sock = TcpStream::connect(address).unwrap();
 

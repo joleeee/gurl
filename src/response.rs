@@ -25,7 +25,7 @@ impl Response {
         let (meta, body) = {
             let pos = rest
                 .windows(2)
-                .position(|window| window == &[b'\r', b'\n'])
+                .position(|window| window == [b'\r', b'\n'])
                 .ok_or(ResponseError::BadResponse)?;
 
             let (meta, body) = rest.split_at(pos);
