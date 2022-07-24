@@ -47,39 +47,61 @@ struct GeminiClient {
     output: Vec<u8>,
 }
 
+#[derive(Debug)]
+pub enum RequestError {
+    DecodeError(response::ResponseError),
+    IoError(io::Error),
+    TlsError(rustls::Error),
+}
+
+impl From<response::ResponseError> for RequestError {
+    fn from(e: response::ResponseError) -> Self {
+        Self::DecodeError(e)
+    }
+}
+
+impl From<io::Error> for RequestError {
+    fn from(e: io::Error) -> Self {
+        Self::IoError(e)
+    }
+}
+
+impl From<rustls::Error> for RequestError {
+    fn from(e: rustls::Error) -> Self {
+        Self::TlsError(e)
+    }
+}
+
 impl GeminiClient {
     fn new(
         socket: TcpStream,
         server_name: rustls::ServerName,
         cfg: Arc<rustls::ClientConfig>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, RequestError> {
+        Ok(Self {
             socket,
-            tls_conn: rustls::ClientConnection::new(cfg, server_name).unwrap(),
+            tls_conn: rustls::ClientConnection::new(cfg, server_name)?,
             closing: false,
             clean_closure: false,
             output: Vec::new(),
-        }
+        })
     }
 
     /// Consumes self
-    fn request(mut self, url: &Url) -> Response {
+    fn request(mut self, url: &Url) -> Result<Response, RequestError> {
         let request = url.to_string() + "\r\n";
-        self.tls_conn
-            .writer()
-            .write_all(request.as_bytes())
-            .unwrap();
+        self.tls_conn.writer().write_all(request.as_bytes())?;
 
-        let mut poll = mio::Poll::new().unwrap();
+        let mut poll = mio::Poll::new()?;
         let mut events = mio::Events::with_capacity(8);
-        self.register(poll.registry());
+        self.register(poll.registry())?;
 
         loop {
-            poll.poll(&mut events, None).unwrap();
+            poll.poll(&mut events, None)?;
 
             for ev in events.iter() {
-                self.ready(ev);
-                self.reregister(poll.registry());
+                self.ready(ev)?;
+                self.reregister(poll.registry())?;
             }
 
             if self.is_closed() {
@@ -87,52 +109,39 @@ impl GeminiClient {
             }
         }
 
-        Response::from_raw(&self.output).unwrap()
+        Ok(Response::from_raw(&self.output)?)
     }
 
-    fn ready(&mut self, ev: &mio::event::Event) {
+    fn ready(&mut self, ev: &mio::event::Event) -> Result<(), RequestError> {
         assert_eq!(ev.token(), CLIENT);
 
         if ev.is_readable() {
-            self.do_read();
+            self.do_read()?;
         }
 
         if ev.is_writable() {
-            self.do_write();
+            self.do_write()?;
         }
+
+        Ok(())
     }
 
-    fn do_read(&mut self) {
-        match self.tls_conn.read_tls(&mut self.socket) {
-            Err(err) => {
-                if err.kind() == io::ErrorKind::WouldBlock {
-                    return;
-                }
-                self.closing = true;
-                return;
-            }
-
-            Ok(0) => {
-                self.closing = true;
-                self.clean_closure = true;
-                return;
-            }
-
-            Ok(_) => {}
+    fn do_read(&mut self) -> Result<(), RequestError> {
+        if self.tls_conn.read_tls(&mut self.socket)? == 0 {
+            // EOF
+            self.closing = true;
+            self.clean_closure = true;
+            return Ok(());
         }
 
-        let io_state = match self.tls_conn.process_new_packets() {
-            Ok(s) => s,
-            Err(err) => {
-                eprintln!("err {}", err);
-                self.closing = true;
-                return;
-            }
-        };
+        let io_state = self.tls_conn.process_new_packets()?;
 
         if io_state.plaintext_bytes_to_read() > 0 {
             let mut data = vec![0; io_state.plaintext_bytes_to_read()];
-            self.tls_conn.reader().read_exact(&mut data).unwrap();
+            self.tls_conn
+                .reader()
+                .read_exact(&mut data)
+                .expect("read exact should never fail");
             self.output.extend_from_slice(&data);
         }
 
@@ -140,28 +149,28 @@ impl GeminiClient {
             self.clean_closure = true;
             self.closing = true;
         }
+
+        Ok(())
     }
 
-    fn do_write(&mut self) {
-        self.tls_conn.write_tls(&mut self.socket).unwrap();
+    fn do_write(&mut self) -> Result<usize, RequestError> {
+        Ok(self.tls_conn.write_tls(&mut self.socket)?)
     }
 
     fn is_closed(&self) -> bool {
         self.closing
     }
 
-    fn register(&mut self, registry: &mio::Registry) {
+    fn register(&mut self, registry: &mio::Registry) -> Result<(), RequestError> {
         let interest = self.event_set();
-        registry
-            .register(&mut self.socket, CLIENT, interest)
-            .unwrap();
+        registry.register(&mut self.socket, CLIENT, interest)?;
+        Ok(())
     }
 
-    fn reregister(&mut self, registry: &mio::Registry) {
+    fn reregister(&mut self, registry: &mio::Registry) -> Result<(), RequestError> {
         let interest = self.event_set();
-        registry
-            .reregister(&mut self.socket, CLIENT, interest)
-            .unwrap();
+        registry.reregister(&mut self.socket, CLIENT, interest)?;
+        Ok(())
     }
 
     fn event_set(&self) -> mio::Interest {
@@ -200,8 +209,8 @@ impl Request {
         };
         let sock = TcpStream::connect(address).unwrap();
 
-        let gem = GeminiClient::new(sock, name, config);
+        let gem = GeminiClient::new(sock, name, config).unwrap();
 
-        gem.request(&self.url)
+        gem.request(&self.url).unwrap()
     }
 }
