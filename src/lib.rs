@@ -103,12 +103,9 @@ impl GeminiClient {
         };
 
         if io_state.plaintext_bytes_to_read() > 0 {
-            let mut plaintext = Vec::new();
-            plaintext.resize(io_state.plaintext_bytes_to_read(), 0);
-            self.tls_conn.reader().read_exact(&mut plaintext).unwrap();
-            for byte in plaintext {
-                self.output.push(byte);
-            }
+            let mut data = vec![0; io_state.plaintext_bytes_to_read()];
+            self.tls_conn.reader().read_exact(&mut data).unwrap();
+            self.output.extend_from_slice(&data);
         }
 
         if io_state.peer_has_closed() {
