@@ -62,6 +62,34 @@ impl GeminiClient {
         }
     }
 
+    /// Consumes self
+    fn request(mut self, url: &Url) -> Response {
+        let request = url.to_string() + "\r\n";
+        self.tls_conn
+            .writer()
+            .write_all(request.as_bytes())
+            .unwrap();
+
+        let mut poll = mio::Poll::new().unwrap();
+        let mut events = mio::Events::with_capacity(8);
+        self.register(poll.registry());
+
+        loop {
+            poll.poll(&mut events, None).unwrap();
+
+            for ev in events.iter() {
+                self.ready(ev);
+                self.reregister(poll.registry());
+            }
+
+            if self.is_closed() {
+                break;
+            }
+        }
+
+        Response::from_raw(&self.output).unwrap()
+    }
+
     fn ready(&mut self, ev: &mio::event::Event) {
         assert_eq!(ev.token(), CLIENT);
 
@@ -172,28 +200,8 @@ impl Request {
         };
         let sock = TcpStream::connect(address).unwrap();
 
-        let mut gem = GeminiClient::new(sock, name, config);
+        let gem = GeminiClient::new(sock, name, config);
 
-        let request = self.url.to_string() + "\r\n";
-        gem.tls_conn.writer().write_all(request.as_bytes()).unwrap();
-
-        let mut poll = mio::Poll::new().unwrap();
-        let mut events = mio::Events::with_capacity(8);
-        gem.register(poll.registry());
-
-        loop {
-            poll.poll(&mut events, None).unwrap();
-
-            for ev in events.iter() {
-                gem.ready(ev);
-                gem.reregister(poll.registry());
-            }
-
-            if gem.is_closed() {
-                break;
-            }
-        }
-
-        Response::from_raw(&gem.output).unwrap()
+        gem.request(&self.url)
     }
 }
